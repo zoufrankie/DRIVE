@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+build/
+
+# Prisma generated client (regenerated on install)
+app/generated/prisma/
+
+# Database files (do not commit user data)
+*.db
+*.db.backup
+*.sqlite
+*.sqlite3
+
+# Environment secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# ML model files
+classifier_model/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+# Prisma auto-generated
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
+AGENTS.md
+
+
+# Next.js auto-generated
+next-env.d.ts
+
