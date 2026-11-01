@@ -6,7 +6,13 @@ async function getOrCreate() {
   return prisma.settings.upsert({
     where: { id: "singleton" },
     update: {},
-    create: { id: "singleton", defaultTaxRate: 10, defaultLaborRate: 100 },
+    create: {
+      id: "singleton",
+      defaultTaxRate: 10,
+      defaultLaborRate: 100,
+      openingHour: 8,
+      closingHour: 18,
+    },
   });
 }
 
@@ -27,12 +33,16 @@ export async function PUT(req: Request) {
       shopName: body.shopName?.trim() || null,
       defaultTaxRate: Number(body.defaultTaxRate) || 0,
       defaultLaborRate: Number(body.defaultLaborRate) || 0,
+      openingHour: body.openingHour !== undefined ? Number(body.openingHour) : 8,
+      closingHour: body.closingHour !== undefined ? Number(body.closingHour) : 18,
     },
     create: {
       id: "singleton",
       shopName: body.shopName?.trim() || null,
       defaultTaxRate: Number(body.defaultTaxRate) || 0,
       defaultLaborRate: Number(body.defaultLaborRate) || 0,
+      openingHour: body.openingHour !== undefined ? Number(body.openingHour) : 8,
+      closingHour: body.closingHour !== undefined ? Number(body.closingHour) : 18,
     },
   });
   return NextResponse.json(settings);

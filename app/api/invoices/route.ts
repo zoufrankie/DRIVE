@@ -8,9 +8,11 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const q = searchParams.get("q")?.trim() ?? "";
   const status = searchParams.get("status")?.trim() ?? "";
+  const jobcardsOnly = searchParams.get("jobcards") === "true";
 
   const invoices = await prisma.invoice.findMany({
     where: {
+      ...(jobcardsOnly ? { jobStartedAt: { not: null } } : {}),
       ...(status ? { status } : {}),
       ...(q
         ? {
@@ -40,6 +42,19 @@ export async function GET(req: Request) {
   return NextResponse.json(invoices);
 }
 
+async function nextInvoiceNumber() {
+  const all = await prisma.invoice.findMany({ select: { number: true } });
+  let max = 0;
+  for (const inv of all) {
+    const m = inv.number.match(/(\d+)$/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return `INV-${String(max + 1).padStart(6, "0")}`;
+}
+
 export async function POST(req: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -54,8 +69,7 @@ export async function POST(req: Request) {
     create: { id: "singleton", defaultTaxRate: 10, defaultLaborRate: 100 },
   });
 
-  const count = await prisma.invoice.count();
-  const number = `INV-${String(count + 1).padStart(6, "0")}`;
+  const number = await nextInvoiceNumber();
 
   const invoice = await prisma.invoice.create({
     data: {

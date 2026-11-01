@@ -6,6 +6,8 @@ export default function SettingsPage() {
     shopName: "",
     defaultTaxRate: "10",
     defaultLaborRate: "100",
+    openingHour: "8",
+    closingHour: "18",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -19,6 +21,8 @@ export default function SettingsPage() {
           shopName: s.shopName ?? "",
           defaultTaxRate: String(s.defaultTaxRate ?? 10),
           defaultLaborRate: String(s.defaultLaborRate ?? 100),
+          openingHour: String(s.openingHour ?? 8),
+          closingHour: String(s.closingHour ?? 18),
         });
       })
       .finally(() => setLoading(false));
@@ -39,6 +43,8 @@ export default function SettingsPage() {
         shopName: form.shopName,
         defaultTaxRate: Number(form.defaultTaxRate) || 0,
         defaultLaborRate: Number(form.defaultLaborRate) || 0,
+        openingHour: Number(form.openingHour) || 8,
+        closingHour: Number(form.closingHour) || 18,
       }),
     });
     setSaving(false);
@@ -90,6 +96,37 @@ export default function SettingsPage() {
               onChange={(e) => update("defaultLaborRate", e.target.value)}
               className="w-full border border-gray-400 p-2 rounded text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-5">
+          <div>
+            <label className="block text-sm font-medium mb-1 text-black">
+              Shop opens (hour, 24h)
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="23"
+              value={form.openingHour}
+              onChange={(e) => update("openingHour", e.target.value)}
+              className="w-full border border-gray-400 p-2 rounded text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-600 mt-1">8 = 8:00 AM · 18 = 6:00 PM</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1 text-black">
+              Shop closes (hour, 24h)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="24"
+              value={form.closingHour}
+              onChange={(e) => update("closingHour", e.target.value)}
+              className="w-full border border-gray-400 p-2 rounded text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-600 mt-1">18 = 6:00 PM · 22 = 10:00 PM</p>
           </div>
         </div>
 

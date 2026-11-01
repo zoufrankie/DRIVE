@@ -15,6 +15,7 @@ export async function GET(
       client: true,
       vehicle: true,
       lines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      payments: { orderBy: { paidAt: "desc" } },
     },
   });
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -40,6 +41,10 @@ export async function PUT(
   if (body.issueDate !== undefined) data.issueDate = new Date(body.issueDate);
   if (body.clientId !== undefined) data.clientId = body.clientId;
   if (body.vehicleId !== undefined) data.vehicleId = body.vehicleId || null;
+  if (body.jobStartedAt !== undefined)
+    data.jobStartedAt = body.jobStartedAt ? new Date(body.jobStartedAt) : null;
+  if (body.completedAt !== undefined)
+    data.completedAt = body.completedAt ? new Date(body.completedAt) : null;
 
   await prisma.invoice.update({ where: { id }, data });
 
@@ -48,8 +53,9 @@ export async function PUT(
     include: { lines: true },
   });
   if (invoice) {
-    const subtotal = invoice.lines.reduce((s, l) => s + l.amount, 0);
-    const taxableSubtotal = invoice.lines
+    const approved = invoice.lines.filter((l) => l.approved);
+    const subtotal = approved.reduce((s, l) => s + l.amount, 0);
+    const taxableSubtotal = approved
       .filter((l) => l.taxable)
       .reduce((s, l) => s + l.amount, 0);
     const taxableBase = taxableSubtotal - invoice.discount;
@@ -63,7 +69,12 @@ export async function PUT(
 
   const finalInvoice = await prisma.invoice.findUnique({
     where: { id },
-    include: { client: true, vehicle: true, lines: true },
+    include: {
+      client: true,
+      vehicle: true,
+      lines: true,
+      payments: { orderBy: { paidAt: "desc" } },
+    },
   });
   return NextResponse.json(finalInvoice);
 }

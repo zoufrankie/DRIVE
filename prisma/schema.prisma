@@ -20,6 +20,8 @@ model Settings {
   shopName          String?
   defaultTaxRate    Float    @default(10)
   defaultLaborRate  Float    @default(100)
+  openingHour       Int      @default(8)
+  closingHour       Int      @default(18)
   updatedAt         DateTime @updatedAt
 }
 
@@ -88,12 +90,16 @@ model Invoice {
   subtotal     Float    @default(0)
   taxAmount    Float    @default(0)
   total        Float    @default(0)
+  amountPaid   Float    @default(0)
   issueDate    DateTime @default(now())
+  jobStartedAt DateTime?
+  completedAt  DateTime?
   clientId     String
   client       Client   @relation(fields: [clientId], references: [id])
   vehicleId    String?
   vehicle      Vehicle? @relation(fields: [vehicleId], references: [id])
   lines        InvoiceLine[]
+  payments     Payment[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -113,6 +119,30 @@ model InvoiceLine {
   amount      Float    @default(0)
   group       String?
   sortOrder   Int      @default(0)
+  category    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount    Float
+  method    String   @default("CASH")
+  notes     String?
+  paidAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+model Appointment {
+  id          String   @id @default(cuid())
+  date        String
+  startMinute Int
+  endMinute   Int
+  title       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
 }

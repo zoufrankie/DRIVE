@@ -18,7 +18,16 @@ type Line = {
   amount: number;
   group: string;
   sortOrder: number;
+  category: string | null;
   _dirty?: boolean;
+};
+
+type Payment = {
+  id: string;
+  amount: number;
+  method: string;
+  notes: string | null;
+  paidAt: string;
 };
 
 type Invoice = {
@@ -31,6 +40,9 @@ type Invoice = {
   otherCharges: number;
   taxRate: number;
   issueDate: string;
+  jobStartedAt: string | null;
+  completedAt: string | null;
+  amountPaid: number;
   client: {
     id: string; name: string; email: string | null; phone: string | null;
     street: string | null; city: string | null; state: string | null; zip: string | null;
@@ -41,20 +53,24 @@ type Invoice = {
     odometer: number | null;
   } | null;
   lines: Line[];
+  payments: Payment[];
 };
 
 const STATUS_OPTIONS = [
   { value: "ESTIMATE", label: "Estimate", color: "bg-amber-100 text-amber-800" },
   { value: "SENT", label: "Sent", color: "bg-blue-100 text-blue-800" },
   { value: "APPROVED", label: "Approved", color: "bg-purple-100 text-purple-800" },
-  { value: "DECLINED", label: "Declined", color: "bg-red-100 text-red-800" },
+  { value: "IN_PROGRESS", label: "In Progress", color: "bg-blue-100 text-blue-800" },
+  { value: "COMPLETED", label: "Completed", color: "bg-purple-100 text-purple-800" },
   { value: "PAID", label: "Paid", color: "bg-green-100 text-green-800" },
-  { value: "NOT_PAID", label: "Not Paid", color: "bg-orange-100 text-orange-800" },
+  { value: "DECLINED", label: "Declined", color: "bg-red-100 text-red-800" },
+  { value: "CANCELLED", label: "Cancelled", color: "bg-gray-300 text-gray-900" },
 ];
+
 function stripLeadingZeros(v: string): string {
-  if (v === '' || v === '0') return v;
-  if (v.startsWith('0.')) return v;
-  return v.replace(/^0+(?=\d)/, '');
+  if (v === "" || v === "0") return v;
+  if (v.startsWith("0.")) return v;
+  return v.replace(/^0+(?=\d)/, "");
 }
 
 function statusMeta(s: string) {
@@ -84,7 +100,9 @@ export default function InvoiceDetailPage({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [placeholder, setPlaceholder] = useState<string | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -126,13 +144,23 @@ export default function InvoiceDetailPage({
       .finally(() => setLoading(false));
   }, [id]);
 
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of lines) {
+      const c = l.category ?? "UNCATEGORIZED";
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [lines]);
+
+  const approvedLines = useMemo(() => lines.filter((l) => l.approved), [lines]);
   const subtotal = useMemo(
-    () => lines.reduce((s, l) => s + (Number(l.amount) || 0), 0),
-    [lines]
+    () => approvedLines.reduce((s, l) => s + (Number(l.amount) || 0), 0),
+    [approvedLines]
   );
   const taxableSubtotal = useMemo(
-    () => lines.filter((l) => l.taxable).reduce((s, l) => s + l.amount, 0),
-    [lines]
+    () => approvedLines.filter((l) => l.taxable).reduce((s, l) => s + l.amount, 0),
+    [approvedLines]
   );
   const discount = invoice?.discount ?? 0;
   const otherCharges = invoice?.otherCharges ?? 0;
@@ -141,10 +169,10 @@ export default function InvoiceDetailPage({
   const taxAmount = taxableBase * (taxRate / 100);
   const total = subtotal + otherCharges - discount + taxAmount;
 
-  const partsProfit = lines
+  const partsProfit = approvedLines
     .filter((l) => l.kind === "PART")
     .reduce((s, l) => s + (l.price - l.cost) * l.qty, 0);
-  const laborProfit = lines
+  const laborProfit = approvedLines
     .filter((l) => l.kind === "LABOR")
     .reduce((s, l) => s + (l.price - l.cost) * l.qty, 0);
   const netProfit = partsProfit + laborProfit - discount;
@@ -308,7 +336,6 @@ export default function InvoiceDetailPage({
     const group = (targetLine.group ?? "").trim();
     const next = !targetLine.approved;
 
-    // No group -> toggle only this row
     if (!group) {
       setLines((prev) =>
         prev.map((l) => (l === targetLine ? { ...l, approved: next, _dirty: true } : l))
@@ -339,7 +366,6 @@ export default function InvoiceDetailPage({
       return;
     }
 
-    // Group present -> toggle ALL lines (parts + labor) that share this group
     setLines((prev) =>
       prev.map((l) =>
         (l.group ?? "").trim() === group ? { ...l, approved: next, _dirty: true } : l
@@ -355,6 +381,53 @@ export default function InvoiceDetailPage({
         (l.group ?? "").trim() === group && l.id ? { ...l, _dirty: false } : l
       )
     );
+  }
+
+  async function startJob() {
+    if (!invoice) return;
+    setBusy(true);
+    await fetch(`/api/invoices/${invoice.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "IN_PROGRESS",
+        jobStartedAt: new Date().toISOString(),
+      }),
+    });
+    const res = await fetch(`/api/invoices/${invoice.id}`);
+    if (res.ok) setInvoice(await res.json());
+    setBusy(false);
+  }
+
+  async function completeJob() {
+    if (!invoice) return;
+    setBusy(true);
+    const nextStatus = invoice.amountPaid >= invoice.total - 0.01 ? "PAID" : "COMPLETED";
+    await fetch(`/api/invoices/${invoice.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: nextStatus,
+        completedAt: new Date().toISOString(),
+      }),
+    });
+    const res = await fetch(`/api/invoices/${invoice.id}`);
+    if (res.ok) setInvoice(await res.json());
+    setBusy(false);
+  }
+
+  async function recordPayment(amount: number, method: string, notes: string) {
+    if (!invoice) return;
+    const res = await fetch(`/api/invoices/${invoice.id}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount, method, notes }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setInvoice(data.invoice);
+      setShowPaymentModal(false);
+    }
   }
 
   async function doDelete() {
@@ -384,15 +457,27 @@ export default function InvoiceDetailPage({
 
   const partsLines = lines.filter((l) => l.kind === "PART");
   const laborLines = lines.filter((l) => l.kind === "LABOR");
+
+  const filteredPartsLines = categoryFilter
+    ? partsLines.filter((l) => (l.category ?? "UNCATEGORIZED") === categoryFilter)
+    : partsLines;
+  const filteredLaborLines = categoryFilter
+    ? laborLines.filter((l) => (l.category ?? "UNCATEGORIZED") === categoryFilter)
+    : laborLines;
+
   const partsApproved = partsLines.length > 0 && partsLines.every((l) => l.approved);
   const partsDeclined = partsLines.length > 0 && partsLines.every((l) => !l.approved);
   const laborApproved = laborLines.length > 0 && laborLines.every((l) => l.approved);
   const laborDeclined = laborLines.length > 0 && laborLines.every((l) => !l.approved);
 
+  const isActiveJob = invoice.jobStartedAt && invoice.status === "IN_PROGRESS";
+  const canStartJob =
+    !invoice.jobStartedAt && ["ESTIMATE", "SENT", "APPROVED"].includes(invoice.status);
+  const balance = invoice.total - invoice.amountPaid;
+
   return (
     <div className="flex min-h-screen">
       <div className="flex-1 min-w-0 p-8 space-y-6">
-        {/* Print-only header */}
         <div className="print-only mb-8">
           <div className="flex justify-between items-start">
             <div>
@@ -438,11 +523,38 @@ export default function InvoiceDetailPage({
           )}
         </div>
 
-        <div className="no-print flex items-center justify-between">
+        <div className="no-print flex items-center justify-between flex-wrap gap-2">
           <Link href="/invoices" className="text-sm text-gray-600 hover:text-gray-900">
             ← Back to Invoices
           </Link>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            {canStartJob && (
+              <button
+                onClick={startJob}
+                disabled={busy}
+                className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+              >
+                Start Job
+              </button>
+            )}
+            {isActiveJob && (
+              <>
+                <button
+                  onClick={() => setShowPaymentModal(true)}
+                  disabled={busy}
+                  className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Record Payment
+                </button>
+                <button
+                  onClick={completeJob}
+                  disabled={busy}
+                  className="bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
+                >
+                  Mark Complete
+                </button>
+              </>
+            )}
             <button
               onClick={saveLines}
               disabled={busy || !lines.some((l) => l._dirty)}
@@ -466,7 +578,6 @@ export default function InvoiceDetailPage({
           </div>
         </div>
 
-        {/* Customer & Vehicle */}
         <section className="no-print bg-white border border-gray-300 rounded p-5">
           <h2 className="text-lg font-bold text-black mb-4">Customer &amp; Vehicle</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -542,11 +653,12 @@ export default function InvoiceDetailPage({
                   <div className="mt-3 flex items-center gap-2">
                     <label className="text-xs text-gray-700 uppercase tracking-wide">Odometer</label>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       value={odoDraft}
-                      onFocus={(e) => e.currentTarget.select()}
-                      onChange={(e) => setOdoDraft(stripLeadingZeros(e.target.value))}
+                      onChange={(e) => setOdoDraft(e.target.value.replace(/\D/g, ""))}
                       onBlur={saveOdometer}
+                      onFocus={(e) => e.currentTarget.select()}
                       placeholder="85000"
                       className="w-32 border border-gray-400 p-1 rounded text-black text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
@@ -568,6 +680,39 @@ export default function InvoiceDetailPage({
           </div>
         </section>
 
+        {/* Category filter bar */}
+        {lines.length > 0 && (
+          <div className="no-print bg-white border border-gray-300 rounded p-3 flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-medium text-black">Filter lines by category:</span>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="border border-gray-400 bg-white text-black p-1.5 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">All categories ({lines.length})</option>
+              {categoryCounts.map(([cat, n]) => (
+                <option key={cat} value={cat}>
+                  {cat === "UNCATEGORIZED" ? "Uncategorized" : cat} ({n})
+                </option>
+              ))}
+            </select>
+            {categoryFilter && (
+              <button
+                onClick={() => setCategoryFilter("")}
+                className="text-xs text-red-600 hover:underline"
+              >
+                Clear filter
+              </button>
+            )}
+            {categoryFilter && (
+              <span className="text-xs text-gray-600">
+                {filteredPartsLines.length + filteredLaborLines.length} line
+                {filteredPartsLines.length + filteredLaborLines.length === 1 ? "" : "s"} match
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="no-print flex items-center gap-4 text-sm">
           <button
             onClick={() => setPlaceholder("Canned Jobs")}
@@ -580,10 +725,12 @@ export default function InvoiceDetailPage({
         <LineTable
           title="Parts"
           kind="PART"
-          lines={partsLines}
+          lines={filteredPartsLines}
           allLines={lines}
           approved={partsApproved}
           declined={partsDeclined}
+          moveEnabled={!categoryFilter}
+          filterActive={!!categoryFilter}
           onGroupApprove={(a) => setGroupApproved("PART", a)}
           onToggleLineGroup={toggleLineGroupApproval}
           onUpdate={updateLine}
@@ -604,10 +751,12 @@ export default function InvoiceDetailPage({
         <LineTable
           title="Labor"
           kind="LABOR"
-          lines={laborLines}
+          lines={filteredLaborLines}
           allLines={lines}
           approved={laborApproved}
           declined={laborDeclined}
+          moveEnabled={!categoryFilter}
+          filterActive={!!categoryFilter}
           onGroupApprove={(a) => setGroupApproved("LABOR", a)}
           onToggleLineGroup={toggleLineGroupApproval}
           onUpdate={updateLine}
@@ -625,7 +774,6 @@ export default function InvoiceDetailPage({
           </button>
         </div>
 
-        {/* Notes & Warranty */}
         <section className="bg-white border border-gray-300 rounded p-5 space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1 text-black">Notes</label>
@@ -647,7 +795,6 @@ export default function InvoiceDetailPage({
           </div>
         </section>
 
-        {/* Print-only totals */}
         <div className="print-only mt-8 border-t border-gray-300 pt-4">
           <div className="flex justify-end">
             <div className="w-64 text-sm">
@@ -759,6 +906,32 @@ export default function InvoiceDetailPage({
           </div>
         </div>
 
+        {invoice.jobStartedAt && (
+          <>
+            <hr className="my-4 border-gray-300" />
+            <div className="space-y-2 text-sm">
+              <div className="text-xs uppercase tracking-wide text-gray-700 mb-2">Payments</div>
+              <Row label="Paid" value={`$${invoice.amountPaid.toFixed(2)}`} />
+              <Row
+                label="Balance"
+                value={`$${Math.max(0, total - invoice.amountPaid).toFixed(2)}`}
+              />
+              {invoice.payments && invoice.payments.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-gray-200 space-y-1">
+                  {invoice.payments.map((p) => (
+                    <div key={p.id} className="text-xs text-gray-700 flex justify-between">
+                      <span>
+                        {p.method} — {new Date(p.paidAt).toLocaleDateString()}
+                      </span>
+                      <span className="font-mono">${p.amount.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
         <hr className="my-4 border-gray-300" />
 
         <div className="space-y-2 text-sm">
@@ -806,6 +979,13 @@ export default function InvoiceDetailPage({
           you pick from a list of saved templates and add them to this invoice with one click.
         </p>
       </Modal>
+
+      <PaymentModal
+        open={showPaymentModal}
+        onClose={() => setShowPaymentModal(false)}
+        balance={balance}
+        onSubmit={recordPayment}
+      />
     </div>
   );
 }
@@ -820,6 +1000,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function LineTable({
   title, kind, lines, allLines, approved, declined,
+  moveEnabled = true, filterActive = false,
   onGroupApprove, onToggleLineGroup, onUpdate, onMove, onRemove, onAdd,
 }: {
   title: string;
@@ -828,6 +1009,8 @@ function LineTable({
   allLines: Line[];
   approved: boolean;
   declined: boolean;
+  moveEnabled?: boolean;
+  filterActive?: boolean;
   onGroupApprove: (approved: boolean) => void;
   onToggleLineGroup: (line: Line) => void;
   onUpdate: <K extends keyof Line>(idx: number, key: K, value: Line[K]) => void;
@@ -836,7 +1019,8 @@ function LineTable({
   onAdd: () => void;
 }) {
   function realIdx(line: Line) { return allLines.indexOf(line); }
-  const total = lines.reduce((s, l) => s + l.amount, 0);
+  const approvedTotal = lines.filter((l) => l.approved).reduce((s, l) => s + l.amount, 0);
+  const declinedCount = lines.filter((l) => !l.approved).length;
   const isLabor = kind === "LABOR";
 
   function StatusPill({ line }: { line: Line }) {
@@ -877,7 +1061,14 @@ function LineTable({
             </button>
           </div>
         </div>
-        <div className="text-sm text-gray-700 font-mono">${total.toFixed(2)}</div>
+        <div className="text-sm text-gray-700 font-mono">
+          ${approvedTotal.toFixed(2)}
+          {declinedCount > 0 && (
+            <span className="text-xs text-red-600 ml-1">
+              ({declinedCount} declined)
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -888,6 +1079,7 @@ function LineTable({
               <th className="px-1 py-2 w-6"></th>
               <th className="px-2 py-2 w-20">Status</th>
               <th className="px-2 py-2">{isLabor ? "Labor Type" : "Description"}</th>
+              <th className="px-2 py-2 w-28">Category</th>
               {isLabor ? (
                 <>
                   <th className="px-2 py-2 w-24">Hours</th>
@@ -918,17 +1110,17 @@ function LineTable({
                     <div className="flex flex-col items-center leading-none">
                       <button
                         onClick={() => onMove(i, "up")}
-                        disabled={!canUp}
-                        title="Move up"
-                        className={`text-gray-600 hover:text-black text-[10px] ${!canUp ? "opacity-20 cursor-not-allowed" : ""}`}
+                        disabled={!canUp || !moveEnabled}
+                        title={moveEnabled ? "Move up" : "Cannot reorder while filtering"}
+                        className={`text-gray-600 hover:text-black text-[10px] ${!canUp || !moveEnabled ? "opacity-20 cursor-not-allowed" : ""}`}
                       >
                         ▲
                       </button>
                       <button
                         onClick={() => onMove(i, "down")}
-                        disabled={!canDown}
-                        title="Move down"
-                        className={`text-gray-600 hover:text-black text-[10px] ${!canDown ? "opacity-20 cursor-not-allowed" : ""}`}
+                        disabled={!canDown || !moveEnabled}
+                        title={moveEnabled ? "Move down" : "Cannot reorder while filtering"}
+                        className={`text-gray-600 hover:text-black text-[10px] ${!canDown || !moveEnabled ? "opacity-20 cursor-not-allowed" : ""}`}
                       >
                         ▼
                       </button>
@@ -948,17 +1140,31 @@ function LineTable({
                       className="w-full bg-transparent text-black outline-none"
                     />
                   </td>
+                  <td className="px-2 py-1">
+                    {l.category ? (
+                      <span
+                        className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 font-medium whitespace-nowrap"
+                        title="Auto-classified by DistilBERT"
+                      >
+                        {l.category}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </td>
                   {isLabor ? (
                     <>
                       <td className="px-2 py-1">
                         <input type="text" inputMode="decimal" value={l.qty}
                           onChange={(e) => onUpdate(i, "qty",   Number(stripLeadingZeros(e.target.value)) || 0)}
+                          onFocus={(e) => e.currentTarget.select()}
                           className="w-full bg-transparent text-black outline-none text-right font-mono"
                         />
                       </td>
                       <td className="px-2 py-1">
                         <input type="text" inputMode="decimal" value={l.price}
                           onChange={(e) => onUpdate(i, "price", Number(stripLeadingZeros(e.target.value)) || 0)}
+                          onFocus={(e) => e.currentTarget.select()}
                           className="w-full bg-transparent text-black outline-none text-right font-mono"
                         />
                       </td>
@@ -968,18 +1174,21 @@ function LineTable({
                       <td className="px-2 py-1">
                         <input type="text" inputMode="decimal" value={l.cost}
                           onChange={(e) => onUpdate(i, "cost",  Number(stripLeadingZeros(e.target.value)) || 0)}
+                          onFocus={(e) => e.currentTarget.select()}
                           className="w-full bg-transparent text-black outline-none text-right font-mono"
                         />
                       </td>
                       <td className="px-2 py-1">
                         <input type="text" inputMode="decimal" value={l.price}
                           onChange={(e) => onUpdate(i, "price", Number(stripLeadingZeros(e.target.value)) || 0)}
+                          onFocus={(e) => e.currentTarget.select()}
                           className="w-full bg-transparent text-black outline-none text-right font-mono"
                         />
                       </td>
                       <td className="px-2 py-1">
                         <input type="text" inputMode="decimal" value={l.qty}
                           onChange={(e) => onUpdate(i, "qty",   Number(stripLeadingZeros(e.target.value)) || 0)}
+                          onFocus={(e) => e.currentTarget.select()}
                           className="w-full bg-transparent text-black outline-none text-right font-mono"
                         />
                       </td>
@@ -1013,7 +1222,13 @@ function LineTable({
               );
             })}
             {lines.length === 0 && (
-              <tr><td colSpan={isLabor ? 10 : 12} className="px-2 py-4 text-center text-gray-600">No {title.toLowerCase()} yet.</td></tr>
+              <tr>
+                <td colSpan={isLabor ? 11 : 13} className="px-2 py-4 text-center text-gray-600">
+                  {filterActive
+                    ? `No ${title.toLowerCase()} in this category.`
+                    : `No ${title.toLowerCase()} yet.`}
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
@@ -1022,5 +1237,102 @@ function LineTable({
         <button onClick={onAdd} className="text-sm text-blue-700 hover:text-blue-900 font-medium">+ Add {title.slice(0, -1)}</button>
       </div>
     </section>
+  );
+}
+
+function PaymentModal({
+  open,
+  onClose,
+  balance,
+  onSubmit,
+}: {
+  open: boolean;
+  onClose: () => void;
+  balance: number;
+  onSubmit: (amount: number, method: string, notes: string) => Promise<void>;
+}) {
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("CASH");
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setAmount(balance > 0 ? balance.toFixed(2) : "0.00");
+      setMethod("CASH");
+      setNotes("");
+    }
+  }, [open, balance]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const amt = Number(amount);
+    if (amt <= 0) return;
+    setBusy(true);
+    await onSubmit(amt, method, notes);
+    setBusy(false);
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Record Payment"
+      actions={
+        <>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded text-sm text-gray-700 hover:bg-gray-100"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={busy || Number(amount) <= 0}
+            className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+          >
+            {busy ? "Recording..." : "Record Payment"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div>
+          <label className="block text-sm font-medium mb-1">Amount ($)</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+            onFocus={(e) => e.currentTarget.select()}
+            className="w-full border border-gray-400 p-2 rounded text-black"
+          />
+          <p className="text-xs text-gray-600 mt-1">
+            Balance due: ${balance.toFixed(2)}
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Method</label>
+          <select
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            className="w-full border border-gray-400 p-2 rounded bg-white text-black"
+          >
+            <option value="CASH">Cash</option>
+            <option value="CARD">Card</option>
+            <option value="CHECK">Check</option>
+            <option value="TRANSFER">Bank Transfer</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Notes (optional)</label>
+          <input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="w-full border border-gray-400 p-2 rounded text-black"
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }

@@ -2,14 +2,34 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 
+const CLASSIFIER_URL = process.env.CLASSIFIER_URL ?? "http://localhost:8001";
+
+async function classifyDescription(text: string): Promise<string | null> {
+  if (!text.trim()) return null;
+  try {
+    const res = await fetch(`${CLASSIFIER_URL}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.category ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function recalcInvoice(invoiceId: string) {
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: { lines: true },
   });
   if (!invoice) return;
-  const subtotal = invoice.lines.reduce((sum, l) => sum + l.amount, 0);
-  const taxableSubtotal = invoice.lines
+  const approved = invoice.lines.filter((l) => l.approved);
+  const subtotal = approved.reduce((sum, l) => sum + l.amount, 0);
+  const taxableSubtotal = approved
     .filter((l) => l.taxable)
     .reduce((sum, l) => sum + l.amount, 0);
   const taxableBase = taxableSubtotal - invoice.discount;
@@ -45,11 +65,14 @@ export async function POST(
   const body = await req.json();
   const qty = Number(body.qty) || 0;
   const price = Number(body.price) || 0;
+  const description = body.description?.trim() || "New item";
+  const category = await classifyDescription(description);
+
   const line = await prisma.invoiceLine.create({
     data: {
       invoiceId: id,
       kind: body.kind === "LABOR" ? "LABOR" : "PART",
-      description: body.description?.trim() || "New item",
+      description,
       cost: Number(body.cost) || 0,
       price,
       qty,
@@ -59,6 +82,7 @@ export async function POST(
       amount: qty * price,
       group: body.group?.trim() || null,
       sortOrder: Number(body.sortOrder) || 0,
+      category,
     },
   });
   await recalcInvoice(id);
@@ -75,11 +99,14 @@ export async function PUT(req: Request) {
   }
   const qty = Number(updates.qty) || 0;
   const price = Number(updates.price) || 0;
+  const newDescription = updates.description?.trim() || "Item";
+  const newCategory = await classifyDescription(newDescription);
+
   await prisma.invoiceLine.update({
     where: { id: lineId },
     data: {
       kind: updates.kind,
-      description: updates.description?.trim() || "Item",
+      description: newDescription,
       cost: Number(updates.cost) || 0,
       price,
       qty,
@@ -88,6 +115,7 @@ export async function PUT(req: Request) {
       approved: updates.approved !== false,
       amount: qty * price,
       group: updates.group?.trim() || null,
+      ...(newCategory ? { category: newCategory } : {}),
     },
   });
   await recalcInvoice(invoiceId);
@@ -121,6 +149,7 @@ export async function PATCH(req: Request) {
     where,
     data: { approved: approved !== false },
   });
+  await recalcInvoice(invoiceId);
   return NextResponse.json({ ok: true });
 }
 
