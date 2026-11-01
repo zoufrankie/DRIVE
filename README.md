@@ -131,8 +131,6 @@ ml-service/         DistilBERT classifier (FastAPI + PyTorch)
 - [x] Dashboard analytics
 - [x] Tax-ready accounting export
 - [ ] Deploy to Vercel + PostgreSQL
-- [ ] Client/vehicle linking for appointments
-- [ ] Profit trend charts on dashboard
 - [ ] End-to-end tests for API routes
 
 ## License
