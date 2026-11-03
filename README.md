@@ -130,6 +130,7 @@ ml-service/         DistilBERT classifier (FastAPI + PyTorch)
 - [x] Appointments calendar
 - [x] Dashboard analytics
 - [x] Tax-ready accounting export
+- [ ] Add default parts to invoice
 - [ ] Deploy to Vercel + PostgreSQL
 - [ ] End-to-end tests for API routes
 
