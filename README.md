@@ -1,4 +1,4 @@
-# DRIVE — Mechanic Shop Management Platform
+# DRIVE (Diagnostics · Repairs · Invoices · Vehicles · Estimates) — Mechanic Shop Management Platform
 
 A full-stack shop management platform for auto repair businesses. Manages clients, vehicles, invoices, jobcards, payments, appointments, and tax-ready accounting exports — with ML-based invoice line classification built in.
 
